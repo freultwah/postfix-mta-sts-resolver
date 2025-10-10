@@ -141,7 +141,8 @@ def main():  # pragma: no cover
             else:
                 logger.info("uvloop is not available. "
                             "Falling back to built-in event loop.")
-        evloop = asyncio.get_event_loop()
+        evloop = asyncio.new_event_loop()
+        asyncio.set_event_loop(evloop)
         logger.info("Eventloop started.")
 
 

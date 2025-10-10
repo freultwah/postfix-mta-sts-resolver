@@ -29,7 +29,8 @@ def main():  # pragma: no cover
     args = parse_args()
     with utils.AsyncLoggingHandler(None) as log_handler:
         utils.setup_logger('RES', args.verbosity, log_handler)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         resolver = STSResolver(loop=loop)
         result = loop.run_until_complete(resolver.resolve(args.domain, args.known_version))
     print(result)
