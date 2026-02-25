@@ -29,10 +29,9 @@ _HEADERS = {"User-Agent": defaults.USER_AGENT}
 # pylint: disable=too-many-instance-attributes
 # pylint: disable=too-many-statements
 class STSResolver:
-    def __init__(self, *, timeout=defaults.TIMEOUT, loop):
-        self._loop = loop
+    def __init__(self, *, timeout=defaults.TIMEOUT):
         self._timeout = timeout
-        self._resolver = aiodns.DNSResolver(timeout=timeout, loop=loop)
+        self._resolver = aiodns.DNSResolver(timeout=timeout)
         self._http_timeout = aiohttp.ClientTimeout(total=timeout)
         self._proxy_info = aiohttp.helpers.proxies_from_env().get('https', None)
         self._logger = logging.getLogger("RES")
@@ -109,9 +108,7 @@ class STSResolver:
 
         # Fetch actual policy
         try:
-            async with aiohttp.ClientSession(loop=self._loop,
-                                             timeout=self._http_timeout) \
-                                                 as session:
+            async with aiohttp.ClientSession(timeout=self._http_timeout) as session:
                 async with session.get(sts_policy_url,
                                        allow_redirects=False,
                                        proxy=self._proxy, headers=_HEADERS,

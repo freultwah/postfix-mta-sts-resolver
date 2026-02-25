@@ -63,7 +63,7 @@ async def heartbeat():
         await asyncio.sleep(.5)
 
 
-async def amain(cfg, loop):  # pragma: no cover
+async def amain(cfg):  # pragma: no cover
     logger = logging.getLogger("MAIN")
 
     proactive_fetch_enabled = cfg['proactive_policy_fetching']['enabled']
@@ -74,21 +74,21 @@ async def amain(cfg, loop):  # pragma: no cover
     await cache.setup()
 
     # Construct request handler
-    responder = STSSocketmapResponder(cfg, loop, cache)
+    responder = STSSocketmapResponder(cfg, cache)
     await responder.start()
     logger.info("Server started.")
 
     # Conditionally construct proactive policy fetcher
     proactive_fetcher = None
     if proactive_fetch_enabled:
-        proactive_fetcher = STSProactiveFetcher(cfg, loop, cache)
+        proactive_fetcher = STSProactiveFetcher(cfg, cache)
         await proactive_fetcher.start()
         logger.info("Proactive policy fetcher started.")
     else:
         logger.info("Proactive policy fetching is disabled.")
 
     exit_event = asyncio.Event()
-    beat = asyncio.ensure_future(heartbeat())
+    beat = asyncio.create_task(heartbeat())
     sig_handler = partial(exit_handler, exit_event)
     signal.signal(signal.SIGTERM, sig_handler)
     signal.signal(signal.SIGINT, sig_handler)
@@ -146,7 +146,7 @@ def main():  # pragma: no cover
         logger.info("Eventloop started.")
 
 
-        evloop.run_until_complete(amain(cfg, evloop))
+        evloop.run_until_complete(amain(cfg))
         evloop.close()
         logger.info("Server finished its work.")
     return os.EX_OK

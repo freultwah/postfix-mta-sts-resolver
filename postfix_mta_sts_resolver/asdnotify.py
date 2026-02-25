@@ -43,7 +43,7 @@ class AsyncSystemdNotifier:
     async def start(self):
         if self._addr is None:
             return False
-        self._loop = asyncio.get_event_loop()
+        self._loop = asyncio.get_running_loop()
         try:
             self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
             self._sock.setblocking(0)

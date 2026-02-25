@@ -201,7 +201,7 @@ async def create_custom_socket(host, port, *,  # pylint: disable=too-many-locals
                                options=None,
                                loop=None):
     if loop is None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
     res = await loop.getaddrinfo(host, port,
                                  family=family, type=type, flags=flags)
     af, s_typ, proto, _, sa = res[0]  # pylint: disable=invalid-name

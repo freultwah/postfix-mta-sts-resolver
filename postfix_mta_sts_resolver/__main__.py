@@ -25,14 +25,16 @@ def parse_args():
     return parser.parse_args()
 
 
+async def _main_async(args):
+    resolver = STSResolver()
+    return await resolver.resolve(args.domain, args.known_version)
+
+
 def main():  # pragma: no cover
     args = parse_args()
     with utils.AsyncLoggingHandler(None) as log_handler:
         utils.setup_logger('RES', args.verbosity, log_handler)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        resolver = STSResolver(loop=loop)
-        result = loop.run_until_complete(resolver.resolve(args.domain, args.known_version))
+        result = asyncio.run(_main_async(args))
     print(result)
 
 

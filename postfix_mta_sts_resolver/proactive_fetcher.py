@@ -9,17 +9,15 @@ from postfix_mta_sts_resolver.resolver import STSResolver, STSFetchResult
 
 # pylint: disable=too-many-instance-attributes
 class STSProactiveFetcher:
-    def __init__(self, cfg, loop, cache):
+    def __init__(self, cfg, cache):
         self._shutdown_timeout = cfg['shutdown_timeout']
         self._pf_interval = cfg['proactive_policy_fetching']['interval']
         self._pf_concurrency_limit = cfg['proactive_policy_fetching']['concurrency_limit']
         self._pf_grace_ratio = cfg['proactive_policy_fetching']['grace_ratio']
         self._logger = logging.getLogger("PF")
-        self._loop = loop
         self._cache = cache
         self._periodic_fetch_task = None
-        self._resolver = STSResolver(loop=loop,
-                                     timeout=cfg["default_zone"]["timeout"])
+        self._resolver = STSResolver(timeout=cfg["default_zone"]["timeout"])
 
     async def process_domain(self, domain_queue):
         async def update(cached):
@@ -58,7 +56,7 @@ class STSProactiveFetcher:
         domain_processors = []
         domain_queue = asyncio.Queue(maxsize=constants.DOMAIN_QUEUE_LIMIT)
         for _ in range(self._pf_concurrency_limit):
-            domain_processor = self._loop.create_task(self.process_domain(domain_queue))
+            domain_processor = asyncio.create_task(self.process_domain(domain_queue))
             domain_processors.append(domain_processor)
 
         # Produce work for domain processors
@@ -97,7 +95,7 @@ class STSProactiveFetcher:
             await self.iterate_domains()
 
     async def start(self):
-        self._periodic_fetch_task = self._loop.create_task(self.fetch_periodically())
+        self._periodic_fetch_task = asyncio.create_task(self.fetch_periodically())
 
     async def stop(self):
         self._periodic_fetch_task.cancel()

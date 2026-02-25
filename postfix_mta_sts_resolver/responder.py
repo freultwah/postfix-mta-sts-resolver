@@ -20,9 +20,8 @@ ZoneEntry = collections.namedtuple('ZoneEntry', ('strict', 'resolver', 'require_
 
 # pylint: disable=too-many-instance-attributes
 class STSSocketmapResponder:
-    def __init__(self, cfg, loop, cache):
+    def __init__(self, cfg, cache):
         self._logger = logging.getLogger("STS")
-        self._loop = loop
         if cfg.get('path') is not None:
             self._unix = True
             self._path = cfg['path']
@@ -37,14 +36,12 @@ class STSSocketmapResponder:
 
         # Construct configurations and resolvers for every socketmap name
         self._default_zone = ZoneEntry(cfg["default_zone"]["strict_testing"],
-                                       STSResolver(loop=loop,
-                                                   timeout=cfg["default_zone"]["timeout"]),
+                                       STSResolver(timeout=cfg["default_zone"]["timeout"]),
                                        cfg["default_zone"]["require_sni"],
                                        cfg["default_zone"]["tlsrpt"])
 
         self._zones = dict((k, ZoneEntry(zone["strict_testing"],
-                                         STSResolver(loop=loop,
-                                                     timeout=zone["timeout"]),
+                                         STSResolver(timeout=zone["timeout"]),
                                          zone["require_sni"],
                                          zone["tlsrpt"]))
                            for k, zone in cfg["zones"].items())
@@ -75,7 +72,7 @@ class STSSocketmapResponder:
         def _spawn(reader, writer):
             def done_cb(task, fut):
                 self._children.discard(task)
-            task = self._loop.create_task(self.handler(reader, writer))
+            task = asyncio.create_task(self.handler(reader, writer))
             task.add_done_callback(partial(done_cb, task))
             self._children.add(task)
             self._logger.debug("len(self._children) = %d", len(self._children))
@@ -85,13 +82,14 @@ class STSSocketmapResponder:
             if self._sockmode is not None:
                 os.chmod(self._path, self._sockmode)
         else:
+            opts = {
+                'host': self._host,
+                'port': self._port,
+                'reuse_address': True,
+            }
             if self._reuse_port: # pragma: no cover
                 if sys.platform in ('win32', 'cygwin'):
-                    opts = {
-                        'host': self._host,
-                        'port': self._port,
-                        'reuse_address': True,
-                    }
+                    pass
                 elif os.name == 'posix':
                     if sys.platform.startswith('freebsd'):
                         sockopts = [
@@ -100,38 +98,29 @@ class STSSocketmapResponder:
                         ]
                         sock = await create_custom_socket(self._host, self._port,
                                                           options=sockopts)
-                        opts = {
-                            'sock': sock,
-                        }
+                        opts = {'sock': sock}
                     else:
-                        opts = {
-                            'host': self._host,
-                            'port': self._port,
-                            'reuse_address': True,
-                            'reuse_port': True,
-                        }
+                        opts['reuse_port'] = True
             self._server = await asyncio.start_server(_spawn, **opts)
 
     async def stop(self):
         self._server.close()
         await self._server.wait_closed()
-        while True:
-            self._logger.warning("Awaiting %d client handlers to finish...",
-                                 len(self._children))
-            remaining = asyncio.gather(*self._children, return_exceptions=True)
+        while self._children:
+            tasks = list(self._children)
             self._children.clear()
+            self._logger.warning("Awaiting %d client handlers to finish...",
+                                 len(tasks))
+            remaining = asyncio.gather(*tasks, return_exceptions=True)
             try:
                 await asyncio.wait_for(remaining, self._shutdown_timeout)
             except asyncio.TimeoutError:
                 self._logger.warning("Shutdown timeout expired. "
                                      "Remaining handlers terminated.")
-                try:
-                    await remaining
-                except asyncio.CancelledError:
-                    pass
-            await asyncio.sleep(1)
-            if not self._children:
-                break
+                for task in tasks:
+                    task.cancel()
+                await remaining
+            await asyncio.sleep(0)
 
     async def sender(self, queue, writer):
         def cleanup_queue():
@@ -246,7 +235,7 @@ class STSSocketmapResponder:
         queue = asyncio.Queue(QUEUE_LIMIT)
 
         # Create coroutine which awaits for steady responses and sends them
-        sender = asyncio.ensure_future(self.sender(queue, writer), loop=self._loop)
+        sender = asyncio.create_task(self.sender(queue, writer))
 
         class EndOfStream(Exception):
             pass
@@ -280,7 +269,7 @@ class STSSocketmapResponder:
                         else:
                             req = b''.join(request_parts)
                             self._logger.debug("Enq request: %s", repr(req))
-                            fut = asyncio.ensure_future(self.process_request(req), loop=self._loop)
+                            fut = asyncio.create_task(self.process_request(req))
                             await queue.put(fut)
                             break
         except netstring.ParseError:
