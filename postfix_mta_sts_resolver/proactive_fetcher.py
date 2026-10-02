@@ -41,8 +41,6 @@ class STSProactiveFetcher:
                     self._logger.debug("Domain %s skipped (cache recent enough).", domain)
                 else:
                     await update(cached)
-            except asyncio.CancelledError:  # pragma: no cover pylint: disable=try-except-raise
-                raise
             except Exception as exc:  # pragma: no cover
                 self._logger.exception("Unhandled exception: %s", exc)
             finally:
@@ -105,3 +103,6 @@ class STSProactiveFetcher:
             await self._periodic_fetch_task
         except asyncio.CancelledError:  # pragma: no cover
             pass
+
+    async def close(self):
+        await self._resolver.close()
