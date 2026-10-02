@@ -28,6 +28,32 @@ async def responder(event_loop):
     await cache.teardown()
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(10)
+async def test_stop_timeout_cancels_hanging_handlers():
+    # Regression test: stop() must not raise CancelledError when
+    # the shutdown timeout expires while handlers are still running.
+    cfg = utils.populate_cfg_defaults(None)
+    cfg["port"] = 48461
+    cfg["shutdown_timeout"] = 1
+    cache = utils.create_cache(cfg['cache']['type'],
+                               cfg['cache']['options'])
+    await cache.setup()
+    resp = STSSocketmapResponder(cfg, cache)
+    await resp.start()
+
+    async def hanging_handler():
+        await asyncio.sleep(30)
+
+    task = asyncio.create_task(hanging_handler())
+    resp._children.add(task)
+    try:
+        await resp.stop()
+        assert task.cancelled()
+    finally:
+        await resp.close()
+        await cache.teardown()
+
+@pytest.mark.asyncio
 @pytest.mark.timeout(5)
 async def test_hanging_stop(responder):
     resp, host, port = responder

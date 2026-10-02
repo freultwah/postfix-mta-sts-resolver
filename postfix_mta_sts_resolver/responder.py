@@ -104,23 +104,41 @@ class STSSocketmapResponder:
             self._server = await asyncio.start_server(_spawn, **opts)
 
     async def stop(self):
+        # Close the listening socket. Do NOT await wait_closed() here:
+        # on Python >= 3.12 it blocks until all active connections are
+        # closed, but those connections only close once their handler
+        # tasks below are finished or cancelled - a deadlock.
         self._server.close()
-        await self._server.wait_closed()
-        while self._children:
+        while True:
             tasks = list(self._children)
-            self._children.clear()
-            self._logger.warning("Awaiting %d client handlers to finish...",
-                                 len(tasks))
-            remaining = asyncio.gather(*tasks, return_exceptions=True)
-            try:
-                await asyncio.wait_for(remaining, self._shutdown_timeout)
-            except asyncio.TimeoutError:
-                self._logger.warning("Shutdown timeout expired. "
-                                     "Remaining handlers terminated.")
-                for task in tasks:
-                    task.cancel()
-                await remaining
-            await asyncio.sleep(0)
+            if tasks:
+                self._children.clear()
+                self._logger.warning("Awaiting %d client handlers to finish...",
+                                     len(tasks))
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*tasks, return_exceptions=True),
+                        self._shutdown_timeout)
+                except asyncio.TimeoutError:
+                    self._logger.warning("Shutdown timeout expired. "
+                                         "Remaining handlers terminated.")
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                continue
+            # No handlers right now. Yield a few times so that
+            # in-flight accepts (whose handler tasks are created via
+            # call_soon after the listening socket is closed) can
+            # register, then drain them as well.
+            for _ in range(3):
+                await asyncio.sleep(0)
+            if not self._children:
+                break
+
+    async def close(self):
+        await self._default_zone.resolver.close()
+        for zone in self._zones.values():
+            await zone.resolver.close()
 
     async def sender(self, queue, writer):
         def cleanup_queue():
@@ -159,9 +177,9 @@ class STSSocketmapResponder:
         req_zone, _, req_domain = raw_req.decode(REQUEST_ENCODING).partition(' ')
         domain = filter_domain(req_domain)
 
-        # Skip lookups for parent domain policies
-        # Skip lookups to non-domains
-        if domain.startswith('.') or is_ipaddr(domain):
+        # Skip lookups for empty domains, parent domain policies
+        # and non-domains
+        if (not domain or domain.startswith('.') or is_ipaddr(domain)):
             return netstring.encode(b'NOTFOUND ')
 
         # Find appropriate zone config
@@ -173,8 +191,6 @@ class STSSocketmapResponder:
         # Lookup for cached policy
         try:
             cached = await self._cache.get(domain)
-        except asyncio.CancelledError:  # pragma: no cover pylint: disable=try-except-raise
-            raise
         except Exception as exc:  # pragma: no cover
             self._logger.exception("Cache get failed: %s", str(exc))
             cached = None
@@ -212,7 +228,7 @@ class STSSocketmapResponder:
                 return netstring.encode(b'NOTFOUND ')
             else:
                 assert cached.pol_body['mx'], "Empty MX list for restrictive policy!"
-                mxlist = [mx.lstrip('*') for mx in set(cached.pol_body['mx'])]
+                mxlist = [mx.lstrip('*') for mx in sorted(set(cached.pol_body['mx']))]
                 resp = "OK secure match=" + ":".join(mxlist)
                 if zone_cfg.require_sni:
                     resp += " servername=hostname"
