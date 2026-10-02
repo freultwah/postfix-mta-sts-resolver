@@ -27,7 +27,10 @@ def parse_args():
 
 async def _main_async(args):
     resolver = STSResolver()
-    return await resolver.resolve(args.domain, args.known_version)
+    try:
+        return await resolver.resolve(args.domain, args.known_version)
+    finally:
+        await resolver.close()
 
 
 def main():  # pragma: no cover

@@ -98,9 +98,15 @@ async def amain(cfg):  # pragma: no cover
         logger.debug("Eventloop interrupted. Shutting down server...")
         await notifier.notify(b"STOPPING=1")
     beat.cancel()
+    try:
+        await beat
+    except asyncio.CancelledError:
+        pass
     await responder.stop()
+    await responder.close()
     if proactive_fetch_enabled:
         await proactive_fetcher.stop()
+        await proactive_fetcher.close()
     await cache.teardown()
 
 
@@ -141,12 +147,8 @@ def main():  # pragma: no cover
             else:
                 logger.info("uvloop is not available. "
                             "Falling back to built-in event loop.")
-        evloop = asyncio.new_event_loop()
-        asyncio.set_event_loop(evloop)
         logger.info("Eventloop started.")
 
-
-        evloop.run_until_complete(amain(cfg))
-        evloop.close()
+        asyncio.run(amain(cfg))
         logger.info("Server finished its work.")
     return os.EX_OK
