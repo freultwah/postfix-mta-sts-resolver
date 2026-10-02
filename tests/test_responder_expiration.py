@@ -22,7 +22,7 @@ def set_env(**environ):
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
-async def test_responder_expiration(event_loop):
+async def test_responder_expiration():
     async def query(host, port, domain):
         reader, writer = await asyncio.open_connection(host, port)
         stream_reader = netstring.StreamReader()
@@ -67,11 +67,12 @@ async def test_responder_expiration(event_loop):
         }
         await cache.set("no-record.loc", base_cache.CacheEntry(0, "0", pol_body))
 
-        resp = STSSocketmapResponder(cfg, event_loop, cache)
+        resp = STSSocketmapResponder(cfg, cache)
         await resp.start()
         try:
             result = await query(cfg['host'], cfg['port'], 'no-record.loc')
             assert result == b'NOTFOUND '
         finally:
             await resp.stop()
+            await resp.close()
             await cache.teardown()

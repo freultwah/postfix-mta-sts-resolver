@@ -10,7 +10,7 @@ from postfix_mta_sts_resolver.responder import STSSocketmapResponder
 import postfix_mta_sts_resolver.utils as utils
 
 @pytest.fixture
-async def responder(event_loop):
+async def responder():
     import postfix_mta_sts_resolver.utils as utils
     cfg = utils.populate_cfg_defaults(None)
     cfg["port"] = 38461
@@ -20,11 +20,12 @@ async def responder(event_loop):
     cache = utils.create_cache(cfg['cache']['type'],
                                cfg['cache']['options'])
     await cache.setup()
-    resp = STSSocketmapResponder(cfg, event_loop, cache)
+    resp = STSSocketmapResponder(cfg, cache)
     await resp.start()
     result = resp, cfg['host'], cfg['port']
     yield result
     await resp.stop()
+    await resp.close()
     await cache.teardown()
 
 @pytest.mark.asyncio

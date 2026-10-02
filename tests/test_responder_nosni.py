@@ -11,8 +11,8 @@ import postfix_mta_sts_resolver.utils as utils
 
 from testdata import load_testdata
 
-@pytest.fixture(scope="module")
-async def responder(event_loop):
+@pytest.fixture
+async def responder():
     import postfix_mta_sts_resolver.utils as utils
     cfg = utils.populate_cfg_defaults({"default_zone": {"require_sni": False}})
     cfg["zones"]["test2"] = cfg["default_zone"]
@@ -20,11 +20,12 @@ async def responder(event_loop):
     cache = utils.create_cache(cfg['cache']['type'],
                                cfg['cache']['options'])
     await cache.setup()
-    resp = STSSocketmapResponder(cfg, event_loop, cache)
+    resp = STSSocketmapResponder(cfg, cache)
     await resp.start()
     result = resp, cfg['host'], cfg['port']
     yield result
     await resp.stop()
+    await resp.close()
     await cache.teardown()
 
 buf_sizes = [4096, 128, 16, 1]

@@ -12,34 +12,36 @@ import postfix_mta_sts_resolver.utils as utils
 
 from testdata import load_testdata
 
-@pytest.fixture(scope="module")
-async def responder(event_loop):
+@pytest.fixture
+async def responder():
     import postfix_mta_sts_resolver.utils as utils
     cfg = utils.populate_cfg_defaults(None)
     cfg["zones"]["test2"] = cfg["default_zone"]
     cache = utils.create_cache(cfg['cache']['type'],
                                cfg['cache']['options'])
     await cache.setup()
-    resp = STSSocketmapResponder(cfg, event_loop, cache)
+    resp = STSSocketmapResponder(cfg, cache)
     await resp.start()
     result = resp, cfg['host'], cfg['port']
     yield result
     await resp.stop()
+    await resp.close()
     await cache.teardown()
 
-@pytest.fixture(scope="module")
-async def unix_responder(event_loop):
+@pytest.fixture
+async def unix_responder():
     import postfix_mta_sts_resolver.utils as utils
     cfg = utils.populate_cfg_defaults({'path': '/tmp/mta-sts.sock', 'mode': 0o666})
     cfg["zones"]["test2"] = cfg["default_zone"]
     cache = utils.create_cache(cfg['cache']['type'],
                                cfg['cache']['options'])
     await cache.setup()
-    resp = STSSocketmapResponder(cfg, event_loop, cache)
+    resp = STSSocketmapResponder(cfg, cache)
     await resp.start()
     result = resp, cfg['path']
     yield result
     await resp.stop()
+    await resp.close()
     await cache.teardown()
 
 buf_sizes = [4096, 128, 16, 1]
@@ -188,14 +190,14 @@ async def test_fast_expire(responder):
 @pytest.mark.parametrize("params", tuple(itertools.product(reqresps, buf_sizes)))
 @pytest.mark.asyncio
 @pytest.mark.timeout(5)
-async def test_responder_with_custom_socket(event_loop, responder, params):
+async def test_responder_with_custom_socket(responder, params):
     (request, response), bufsize = params
     resp, host, port = responder
     sock = await utils.create_custom_socket(host, 0, flags=0,
                                             options=[(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)])
     stream_reader = netstring.StreamReader()
     string_reader = stream_reader.next_string()
-    await event_loop.run_in_executor(None, sock.connect, (host, port))
+    await asyncio.get_running_loop().run_in_executor(None, sock.connect, (host, port))
     reader, writer = await asyncio.open_connection(sock=sock)
     try:
         writer.write(netstring.encode(request))

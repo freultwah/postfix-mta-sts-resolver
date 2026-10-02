@@ -22,7 +22,7 @@ def set_env(**environ):
 @pytest.mark.asyncio
 @pytest.mark.timeout(5)
 async def test_simple_resolve(domain):
-    resolver = Resolver(loop=None, timeout=1)
+    resolver = Resolver(timeout=1)
     status, (ver, policy) = await resolver.resolve(domain)
     assert status is FR.VALID
     assert 'mx' in policy
@@ -37,6 +37,7 @@ async def test_simple_resolve(domain):
     status, body2 = await resolver.resolve(domain, ver)
     assert status is FR.NOT_CHANGED
     assert body2 is None
+    await resolver.close()
 
 @pytest.mark.parametrize("domain,expected_status", [("good.loc", FR.VALID),
                                                     ("good.loc.", FR.VALID),
@@ -64,8 +65,8 @@ async def test_simple_resolve(domain):
                                                     ])
 @pytest.mark.asyncio
 @pytest.mark.timeout(5)
-async def test_resolve_status(event_loop, domain, expected_status):
-    resolver = Resolver(loop=event_loop, timeout=1)
+async def test_resolve_status(domain, expected_status):
+    resolver = Resolver(timeout=1)
     status, body = await resolver.resolve(domain)
     assert status is expected_status
     if expected_status is FR.VALID:
@@ -75,30 +76,34 @@ async def test_resolve_status(event_loop, domain, expected_status):
             assert pol['mx']
     else:
         assert body is None
+    await resolver.close()
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(5)
-async def test_resolve_dns_timeout(event_loop):
-    resolver = Resolver(loop=event_loop, timeout=1)
+async def test_resolve_dns_timeout():
+    resolver = Resolver(timeout=1)
     status, body = await resolver.resolve('blackhole.loc')
     assert status is FR.FETCH_ERROR
     assert body is None
+    await resolver.close()
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(5)
-async def test_proxy(event_loop):
+async def test_proxy():
     with set_env(https_proxy='http://127.0.0.2:1380'):
-        resolver = Resolver(loop=event_loop)
+        resolver = Resolver()
     status, (ver, pol) = await resolver.resolve("good.loc")
     assert status is FR.VALID
     assert pol['mode'] == 'enforce'
     assert pol['mx'] == ['mail.loc']
+    await resolver.close()
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(5)
-async def test_proxy_negative(event_loop):
+async def test_proxy_negative():
     with set_env(https_proxy='http://127.0.0.2:18888'):
-        resolver = Resolver(loop=event_loop)
+        resolver = Resolver()
     status, body = await resolver.resolve("good.loc")
     assert status is FR.FETCH_ERROR
     assert body is None
+    await resolver.close()

@@ -60,9 +60,9 @@ class UnixDatagramReceiver:
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="does not run on windows")
 
-@pytest.fixture(scope="module")
-def unix_dgram_receiver(event_loop):
-    udr = UnixDatagramReceiver(event_loop)
+@pytest.fixture
+async def unix_dgram_receiver():
+    udr = UnixDatagramReceiver(asyncio.get_running_loop())
     yield udr
     udr.close()
 

@@ -29,7 +29,7 @@ async def cache():
                           ])
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
-async def test_cache_update(event_loop, cache,
+async def test_cache_update(cache,
                             domain, init_policy_id, expected_policy_id, expected_update):
     cfg = utils.populate_cfg_defaults(None)
     cfg['proactive_policy_fetching']['enabled'] = True
@@ -40,7 +40,7 @@ async def test_cache_update(event_loop, cache,
 
     await cache.set(domain, base_cache.CacheEntry(0, init_policy_id, {}))
 
-    pf = STSProactiveFetcher(cfg, event_loop, cache)
+    pf = STSProactiveFetcher(cfg, cache)
     await pf.start()
 
     # Wait for policy fetcher to do its rounds
@@ -65,10 +65,11 @@ async def test_cache_update(event_loop, cache,
         assert not result.pol_body
 
     await pf.stop()
+    await pf.close()
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
-async def test_no_cache_update_during_grace_period(event_loop, cache):
+async def test_no_cache_update_during_grace_period(cache):
     cfg = utils.populate_cfg_defaults(None)
     cfg['proactive_policy_fetching']['enabled'] = True
     cfg['proactive_policy_fetching']['interval'] = 86400
@@ -78,7 +79,7 @@ async def test_no_cache_update_during_grace_period(event_loop, cache):
     init_record = base_cache.CacheEntry(time.time() - 1, "19990907T090909", {})
     await cache.set("good.loc", init_record)
 
-    pf = STSProactiveFetcher(cfg, event_loop, cache)
+    pf = STSProactiveFetcher(cfg, cache)
     await pf.start()
 
     # Wait for policy fetcher to do its round
@@ -91,10 +92,11 @@ async def test_no_cache_update_during_grace_period(event_loop, cache):
     assert result == init_record  # no update (cached being fresh enough)
 
     await pf.stop()
+    await pf.close()
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
-async def test_respect_previous_proactive_fetch_ts(event_loop, cache):
+async def test_respect_previous_proactive_fetch_ts(cache):
     cfg = utils.populate_cfg_defaults(None)
     cfg['proactive_policy_fetching']['enabled'] = True
     cfg['proactive_policy_fetching']['interval'] = 86400
@@ -106,7 +108,7 @@ async def test_respect_previous_proactive_fetch_ts(event_loop, cache):
     await cache.set("good.loc", init_record)
     await cache.set_proactive_fetch_ts(previous_proactive_fetch_ts)
 
-    pf = STSProactiveFetcher(cfg, event_loop, cache)
+    pf = STSProactiveFetcher(cfg, cache)
     await pf.start()
 
     # Wait for policy fetcher to do its potential work
@@ -119,3 +121,4 @@ async def test_respect_previous_proactive_fetch_ts(event_loop, cache):
     assert result == init_record  # no update
 
     await pf.stop()
+    await pf.close()
