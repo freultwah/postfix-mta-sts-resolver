@@ -31,8 +31,10 @@ _HEADERS = {"User-Agent": defaults.USER_AGENT}
 class STSResolver:
     def __init__(self, *, timeout=defaults.TIMEOUT):
         self._timeout = timeout
-        self._resolver = aiodns.DNSResolver(timeout=timeout)
+        self._dns_resolver = None
+        self._dns_query = None
         self._http_timeout = aiohttp.ClientTimeout(total=timeout)
+        self._session = None
         self._proxy_info = aiohttp.helpers.proxies_from_env().get('https', None)
         self._logger = logging.getLogger("RES")
 
@@ -42,6 +44,31 @@ class STSResolver:
         else:
             self._proxy = self._proxy_info.proxy
             self._proxy_auth = self._proxy_info.proxy_auth
+
+    async def _get_dns_query(self):
+        # Created lazily so that it is always bound to the running
+        # event loop, whatever loop the resolver happens to run in.
+        if self._dns_resolver is None:
+            self._dns_resolver = aiodns.DNSResolver(timeout=self._timeout)
+            # query_dns() is preferred; query() is a deprecated alias
+            # in newer aiodns versions but the only option in older ones.
+            query = getattr(self._dns_resolver, 'query_dns', None)
+            self._dns_query = (query if query is not None
+                               else self._dns_resolver.query)
+        return self._dns_query
+
+    async def _get_session(self):
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(timeout=self._http_timeout)
+        return self._session
+
+    async def close(self):
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+            self._session = None
+        if self._dns_resolver is not None:
+            self._dns_resolver.cancel()
+            self._dns_resolver = None
 
     # pylint: disable=too-many-locals,too-many-branches,too-many-return-statements
     async def resolve(self, domain, last_known_id=None):
@@ -56,9 +83,10 @@ class STSResolver:
                            "known_id=%s", sts_txt_domain, last_known_id)
 
         # Try to fetch it
+        dns_query = await self._get_dns_query()
         try:
             txt_records = await asyncio.wait_for(
-                self._resolver.query(sts_txt_domain, 'TXT'),
+                dns_query(sts_txt_domain, 'TXT'),
                 timeout=self._timeout)
         except aiodns.error.DNSError as error:
             if error.args[0] == aiodns.error.ARES_ETIMEOUT:  # pragma: no cover pylint: disable=no-else-return,no-member
@@ -108,29 +136,29 @@ class STSResolver:
 
         # Fetch actual policy
         try:
-            async with aiohttp.ClientSession(timeout=self._http_timeout) as session:
-                async with session.get(sts_policy_url,
-                                       allow_redirects=False,
-                                       proxy=self._proxy, headers=_HEADERS,
-                                       proxy_auth=self._proxy_auth) as resp:
-                    if resp.status != 200:
+            session = await self._get_session()
+            async with session.get(sts_policy_url,
+                                   allow_redirects=False,
+                                   proxy=self._proxy, headers=_HEADERS,
+                                   proxy_auth=self._proxy_auth) as resp:
+                if resp.status != 200:
+                    raise BadSTSPolicy()
+                if not is_plaintext(resp.headers.get('Content-Type', '')):
+                    raise BadSTSPolicy()
+                if (int(resp.headers.get('Content-Length', '0')) >
+                        HARD_RESP_LIMIT):
+                    raise BadSTSPolicy()
+                policy_file = BytesIO()
+                while True:
+                    chunk = await resp.content.read(CHUNK)
+                    if not chunk:
+                        break
+                    if policy_file.tell() + len(chunk) > HARD_RESP_LIMIT:
                         raise BadSTSPolicy()
-                    if not is_plaintext(resp.headers.get('Content-Type', '')):
-                        raise BadSTSPolicy()
-                    if (int(resp.headers.get('Content-Length', '0')) >
-                            HARD_RESP_LIMIT):
-                        raise BadSTSPolicy()
-                    policy_file = BytesIO()
-                    while policy_file.tell() <= HARD_RESP_LIMIT:
-                        chunk = await resp.content.read(CHUNK)
-                        if not chunk:
-                            break
-                        policy_file.write(chunk)
-                    else:
-                        raise BadSTSPolicy()
-                    charset = (resp.charset if resp.charset is not None
-                               else 'ascii')
-                    policy_text = policy_file.getvalue().decode(charset)
+                    policy_file.write(chunk)
+                charset = (resp.charset if resp.charset is not None
+                           else 'utf-8')
+                policy_text = policy_file.getvalue().decode(charset)
         except Exception as exc:
             self._logger.warning("STS policy fetch for domain %s failed with "
                                  "error: %s", repr(domain), str(exc))
