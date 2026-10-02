@@ -37,16 +37,17 @@ class InternalLRUCache(BaseCache):
             token = 0
 
         total = len(self._cache)
-        left = total - token
-        if left > 0:
-            amount = min(left, amount_hint)
-            new_token = token + amount if token + amount < total else None
-            # Take "amount" of oldest
-            result = list(islice(self._cache.items(), amount))
-            for key, _ in result:  # for LRU consistency
-                await self.get(key)
-            return new_token, result
-        return None, []
+        if token >= total:
+            return None, []
+        amount = min(total - token, amount_hint)
+        new_token = token + amount
+        if new_token >= total:
+            new_token = None
+        # Take "amount" of oldest entries starting from the cursor.
+        # Deliberately no LRU refresh here: refreshing would reorder
+        # the dict and invalidate position-based cursors.
+        result = list(islice(self._cache.items(), token, token + amount))
+        return new_token, result
 
     async def get_proactive_fetch_ts(self):
         return self._proactive_fetch_ts
