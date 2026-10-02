@@ -3,7 +3,6 @@
 import json
 import logging
 
-import psycopg
 from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 
@@ -18,7 +17,7 @@ class PostgresCache(BaseCache):
             psycopglogger.addHandler(logging.NullHandler())
         self._timeout = timeout
         self._pool = None
-        self.kwargs = kwargs
+        self._kwargs = kwargs
 
     async def setup(self):
         queries = [
@@ -41,10 +40,11 @@ class PostgresCache(BaseCache):
             ),
         ]
 
-        conninfo = self.kwargs.get("dsn") or self.kwargs
+        conninfo = self._kwargs.get("dsn") or self._kwargs
 
         # Prevent implicit open
-        self._pool = AsyncConnectionPool(conninfo=conninfo, open=False)
+        self._pool = AsyncConnectionPool(conninfo=conninfo, open=False,
+                                         timeout=self._timeout)
         await self._pool.open()
 
         async with self._pool.connection() as conn:
