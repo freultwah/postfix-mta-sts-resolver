@@ -11,8 +11,30 @@ from .defaults import SQLITE_THREADS, SQLITE_TIMEOUT
 from .base_cache import BaseCache, CacheEntry
 
 
+class _PoolBorrow:
+    def __init__(self, pool, timeout):
+        self._pool = pool
+        self._timeout = timeout
+        self._conn = None
+
+    async def __aenter__(self):
+        self._conn = await asyncio.wait_for(self._pool._free_conns.get(),
+                                            self._timeout)
+        return self._conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self._pool._stopped:
+            await self._conn.close()
+            return
+        if exc_type is not None:
+            await self._conn.close()
+            self._conn = await self._pool._new_conn()
+        self._pool._free_conns.put_nowait(self._conn)
+
+
 class SqliteConnPool:
-    def __init__(self, threads, conn_args=(), conn_kwargs=None, init_queries=()):
+    def __init__(self, threads, conn_args=(), conn_kwargs=None,
+                 init_queries=()):
         self._threads = threads
         self._conn_args = conn_args
         self._conn_kwargs = conn_kwargs if conn_kwargs is not None else {}
@@ -27,7 +49,7 @@ class SqliteConnPool:
             async with db.cursor() as cur:
                 for q in self._init_queries:
                     await cur.execute(q)
-        except:
+        except Exception:
             await db.close()
             raise
         return db
@@ -50,27 +72,7 @@ class SqliteConnPool:
     def borrow(self, timeout=None):
         if not self._ready:
             raise RuntimeError("Pool not prepared!")
-        class PoolBorrow:
-            # pylint: disable=no-self-argument
-            def __init__(s):
-                s._conn = None
-
-            # pylint: disable=no-self-argument
-            async def __aenter__(s):
-                s._conn = await asyncio.wait_for(self._free_conns.get(),
-                                                 timeout)
-                return s._conn
-
-            # pylint: disable=no-self-argument
-            async def __aexit__(s, exc_type, exc, tb):
-                if self._stopped:
-                    await s._conn.close()
-                    return
-                if exc_type is not None:
-                    await s._conn.close()
-                    s._conn = await self._new_conn()
-                self._free_conns.put_nowait(s._conn)
-        return PoolBorrow()
+        return _PoolBorrow(self, timeout)
 
 
 class SqliteCache(BaseCache):
