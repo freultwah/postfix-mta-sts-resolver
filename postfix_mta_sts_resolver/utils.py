@@ -1,4 +1,5 @@
 import enum
+import ipaddress
 import logging
 import logging.handlers
 import asyncio
@@ -15,9 +16,9 @@ from . import defaults
 class LogLevel(enum.IntEnum):
     debug = logging.DEBUG
     info = logging.INFO
-    warn = logging.WARN
+    warn = logging.WARNING
     error = logging.ERROR
-    fatal = logging.FATAL
+    fatal = logging.CRITICAL
     crit = logging.CRITICAL
 
     def __str__(self):
@@ -165,9 +166,9 @@ def is_plaintext(contenttype):
 
 def is_ipaddr(addr):
     try:
-        socket.getaddrinfo(addr, None, flags=socket.AI_NUMERICHOST)
+        ipaddress.ip_address(addr)
         return True
-    except socket.gaierror:
+    except ValueError:
         return False
 
 
