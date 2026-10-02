@@ -1,0 +1,91 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    name: Test suite (Python 3.11, full harness)
+    runs-on: ubuntu-latest
+    container: python:3.11-bookworm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            redis-server dnsmasq lsof nginx-extras tinyproxy postgresql \
+            build-essential libssl-dev libffi-dev python3-dev curl
+
+      - name: Configure dnsmasq
+        run: |
+          install -m 644 tests/resolv.conf /etc/resolv-dnsmasq.conf
+          cat tests/dnsmasq.conf.appendix >> /etc/dnsmasq.conf
+          echo 'nameserver 127.0.0.1' > /etc/resolv.conf
+
+      - name: Configure PostgreSQL
+        run: |
+          sed -i 's/\bpeer\b/trust/; s\bscram-sha-256\b/trust/; s\bmd5\b/trust/' \
+            /etc/postgresql/*/main/pg_hba.conf
+
+      - name: Generate test certificates
+        run: |
+          pip install cryptography
+          mkdir -p /tmp/certs /tmp/bad-certs
+          python tests/mkcerts.py -o /tmp/certs \
+            -D good.loc mta-sts.good.loc \
+            -D bad-policy1.loc mta-sts.bad-policy1.loc \
+            -D bad-policy2.loc mta-sts.bad-policy2.loc \
+            -D bad-policy3.loc mta-sts.bad-policy3.loc \
+            -D bad-policy4.loc mta-sts.bad-policy4.loc \
+            -D bad-policy5.loc mta-sts.bad-policy5.loc \
+            -D bad-policy6.loc mta-sts.bad-policy6.loc \
+            -D bad-policy7.loc mta-sts.bad-policy7.loc \
+            -D bad-policy8.loc mta-sts.bad-policy8.loc \
+            -D bad-cert2.loc \
+            -D valid-none.loc mta-sts.valid-none.loc \
+            -D mta-sts.testing.loc \
+            -D chunked-overlength.loc mta-sts.chunked-overlength.loc \
+            -D static-overlength.loc mta-sts.static-overlength.loc \
+            -D fast-expire.loc '*.fast-expire.loc'
+          python tests/mkcerts.py -o /tmp/bad-certs \
+            -D bad-cert1.loc mta-sts.bad-cert1.loc
+          mkdir -p /usr/local/share/ca-certificates/test
+          install -m 644 /tmp/certs/ca.pem \
+            /usr/local/share/ca-certificates/test/test-ca.crt
+          update-ca-certificates
+
+      - name: Configure nginx and tinyproxy
+        run: |
+          install -m 644 tests/nginx.conf /etc/nginx/nginx.conf
+          install -m 644 tests/tinyproxy.conf /etc/tinyproxy/tinyproxy.conf
+
+      - name: Start services
+        run: |
+          redis-server --daemonize yes
+          dnsmasq
+          pg_ctlcluster "$(ls /etc/postgresql | head -1)" main start
+          nginx
+          tinyproxy
+          for _ in 1 2 3 4 5; do
+            curl -s -o /dev/null \
+              -x http://127.0.0.2:1380 \
+              https://mta-sts.good.loc/.well-known/mta-sts.txt && exit 0
+            sleep 2
+          done
+          echo "Proxy startup failed" >&2
+          exit 1
+
+      - name: Install package with test dependencies
+        run: pip install -e '.[dev,sqlite,redis,postgres]'
+
+      - name: Run test suite
+        run: TOXENV=py311 pytest .
+
+      - name: Lint
+        run: pylint --reports=n --rcfile=.pylintrc postfix_mta_sts_resolver
