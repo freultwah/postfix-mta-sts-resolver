@@ -20,24 +20,18 @@ class STSProactiveFetcher:
         self._resolver = STSResolver(timeout=cfg["default_zone"]["timeout"])
 
     async def process_domain(self, domain_queue):
-        async def update(cached):
-            # Only trust the cached policy ID for the DNS change-check while
-            # the policy is within its max_age; otherwise force a full fetch
-            # so the policy lifetime stays tied to the last HTTPS fetch
-            # (RFC 8461 §3.2).
-            if cached.pol_body and cached.pol_body.get('max_age', 0) + cached.ts < ts:
-                last_known_id = None
-            else:
-                last_known_id = cached.pol_id
-            status, policy = await self._resolver.resolve(domain, last_known_id)
+        async def update():
+            # Always perform a full HTTPS fetch (do not rely on the DNS ID
+            # change-check) so that the policy is periodically refreshed over
+            # HTTPS before it expires. Relying only on the DNS ID would let a
+            # stable policy reach expiry without an advance refresh, so a
+            # temporary outage at expiry would drop enforcement (RFC 8461
+            # §10.2).
+            status, policy = await self._resolver.resolve(domain, None)
             if status is STSFetchResult.VALID:
                 pol_id, pol_body = policy
                 updated = CacheEntry(ts, pol_id, pol_body)
                 await self._cache.safe_set(domain, updated, self._logger)
-            elif status is STSFetchResult.NOT_CHANGED:
-                # Policy unchanged: keep the original fetch timestamp so the
-                # policy still expires max_age after the last HTTPS fetch.
-                pass
             else:
                 self._logger.warning("Domain %s does not have a valid policy.", domain)
 
@@ -49,7 +43,7 @@ class STSProactiveFetcher:
                 if ts - cached.ts < self._pf_interval / self._pf_grace_ratio:
                     self._logger.debug("Domain %s skipped (cache recent enough).", domain)
                 else:
-                    await update(cached)
+                    await update()
             except Exception as exc:  # pragma: no cover
                 self._logger.exception("Unhandled exception: %s", exc)
             finally:

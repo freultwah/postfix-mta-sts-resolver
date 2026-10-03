@@ -49,21 +49,27 @@ class STSSocketmapResponder:
         self._cache = cache
         self._children = set()
         self._server = None
+        # Timestamp of the last successful DNS/HTTPS check per domain, used
+        # to throttle lookups to at most one per cache_grace seconds. This
+        # is kept separate from the cached policy's fetch timestamp, which is
+        # only updated on a full HTTPS fetch (RFC 8461 §3.2) and therefore
+        # cannot be used for throttling.
+        self._last_check = {}
 
     # Check if cached record is nonexistent or stale
-    def is_stale(self, cached):
+    def is_stale(self, cached, domain):
         ts = time.time()  # pylint: disable=invalid-name
 
         # Nonexistent ?
         if cached is None:
             return True
 
-        # Expired grace period ?
-        if ts - cached.ts > self._grace:
-            return True
-
         # Expired policy ?
         if cached.pol_body['max_age'] + cached.ts < ts:
+            return True
+
+        # Expired grace period since the last successful check ?
+        if ts - self._last_check.get(domain, 0) > self._grace:
             return True
 
         return False
@@ -196,7 +202,7 @@ class STSSocketmapResponder:
             cached = None
 
         # DNS lookup and cache update
-        if self.is_stale(cached):
+        if self.is_stale(cached, domain):
             ts = time.time()  # pylint: disable=invalid-name
             self._logger.debug("Lookup PERFORMED: domain = %s", domain)
             # Only trust the cached policy ID for the DNS change-check while
@@ -216,12 +222,14 @@ class STSSocketmapResponder:
             if status is STSFetchResult.NOT_CHANGED:
                 # Policy unchanged: keep the cached entry (and its fetch
                 # timestamp) as-is. A DNS check must not extend the policy
-                # lifetime (RFC 8461 §3.2).
-                pass
+                # lifetime (RFC 8461 §3.2). Record the check time so the
+                # lookup is throttled by cache_grace.
+                self._last_check[domain] = ts
             elif status is STSFetchResult.VALID:
                 pol_id, pol_body = policy
                 cached = CacheEntry(ts, pol_id, pol_body)
                 await self._cache.safe_set(domain, cached, self._logger)
+                self._last_check[domain] = ts
             else:
                 if cached is None:
                     have_policy = False

@@ -303,3 +303,29 @@ async def test_not_changed_does_not_reset_ts():
         assert result.ts == init_ts
     finally:
         await cache.teardown()
+
+
+@pytest.mark.asyncio
+async def test_successful_check_throttles_subsequent_lookups():
+    # P2: a successful check records a check timestamp (separate from the
+    # policy fetch timestamp) so that requests within cache_grace do not
+    # re-invoke the resolver.
+    cfg = utils.populate_cfg_defaults(None)
+    cfg["cache_grace"] = 3600  # 1 hour grace
+    cache = utils.create_cache(cfg['cache']['type'], cfg['cache']['options'])
+    await cache.setup()
+    try:
+        resp = _make_responder(cfg, cache, _MockResolver(FR.NOT_CHANGED))
+        now = time.time()  # pylint: disable=invalid-name
+        await cache.set("good.loc",
+                        base_cache.CacheEntry(now - 10, "pol1",
+                                              {"version": "STSv1", "mode": "enforce",
+                                               "mx": ["mail.loc"], "max_age": 86400}))
+        # First request: no prior check -> lookup is performed.
+        await resp.process_request(b'test good.loc')
+        # Second request (immediately): within grace of the last check ->
+        # no lookup.
+        await resp.process_request(b'test good.loc')
+        assert resp._default_zone.resolver.calls == [("good.loc", "pol1")]
+    finally:
+        await cache.teardown()

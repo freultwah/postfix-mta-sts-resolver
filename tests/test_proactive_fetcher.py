@@ -19,21 +19,21 @@ async def cache():
     await cache.teardown()
 
 
-@pytest.mark.parametrize("domain, init_policy_id, init_body, expected_policy_id, ts_reset, body_present",
-                         [("good.loc", "19990907T090909", {}, "20180907T090909", True, True),
-                          ("good.loc", "20180907T090909",
-                           {"version": "STSv1", "mode": "enforce",
-                            "mx": ["mail.loc"], "max_age": 86400},
-                           "20180907T090909", False, True),
-                          ("valid-none.loc", "19990907T090909", {}, "20180907T090909", True, True),
-                          ("blackhole.loc", "19990907T090909", {}, "19990907T090909", False, False),
-                          ("bad-record1.loc", "19990907T090909", {}, "19990907T090909", False, False),
-                          ("bad-policy1.loc", "19990907T090909", {}, "19990907T090909", False, False)
+# The proactive fetcher always performs a full HTTPS fetch (it does not rely
+# on the DNS ID change-check), so any domain with a valid policy is refreshed
+# (ts reset, body present) regardless of the cached policy ID.
+@pytest.mark.parametrize("domain, init_policy_id, expected_policy_id, ts_reset, body_present",
+                         [("good.loc", "19990907T090909", "20180907T090909", True, True),
+                          ("good.loc", "20180907T090909", "20180907T090909", True, True),
+                          ("valid-none.loc", "19990907T090909", "20180907T090909", True, True),
+                          ("blackhole.loc", "19990907T090909", "19990907T090909", False, False),
+                          ("bad-record1.loc", "19990907T090909", "19990907T090909", False, False),
+                          ("bad-policy1.loc", "19990907T090909", "19990907T090909", False, False)
                           ])
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
 async def test_cache_update(cache,
-                            domain, init_policy_id, init_body,
+                            domain, init_policy_id,
                             expected_policy_id, ts_reset, body_present):
     cfg = utils.populate_cfg_defaults(None)
     cfg['proactive_policy_fetching']['enabled'] = True
@@ -43,7 +43,7 @@ async def test_cache_update(cache,
     cfg['shutdown_timeout'] = 1
 
     init_ts = time.time() - 10
-    await cache.set(domain, base_cache.CacheEntry(init_ts, init_policy_id, init_body))
+    await cache.set(domain, base_cache.CacheEntry(init_ts, init_policy_id, {}))
 
     pf = STSProactiveFetcher(cfg, cache)
     await pf.start()
@@ -58,11 +58,11 @@ async def test_cache_update(cache,
     assert result
     assert result.pol_id == expected_policy_id
     if ts_reset:
-        # A fresh HTTPS fetch happened: the timestamp was updated.
+        # A full HTTPS fetch happened: the timestamp was updated and a fresh
+        # policy body was stored.
         assert time.time() - result.ts < 10
     else:
-        # Either NOT_CHANGED (policy unchanged) or no update at all: the
-        # original fetch timestamp must be preserved (RFC 8461 §3.2).
+        # No valid policy could be fetched: the original entry is preserved.
         assert result.ts == init_ts
     assert bool(result.pol_body) == body_present
 
