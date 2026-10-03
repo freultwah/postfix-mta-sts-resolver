@@ -19,18 +19,22 @@ async def cache():
     await cache.teardown()
 
 
-@pytest.mark.parametrize("domain, init_policy_id, expected_policy_id, expected_update",
-                         [("good.loc", "19990907T090909", "20180907T090909", True),
-                          ("good.loc", "20180907T090909", "20180907T090909", True),
-                          ("valid-none.loc", "19990907T090909", "20180907T090909", True),
-                          ("blackhole.loc", "19990907T090909", "19990907T090909", False),
-                          ("bad-record1.loc", "19990907T090909", "19990907T090909", False),
-                          ("bad-policy1.loc", "19990907T090909", "19990907T090909", False)
+@pytest.mark.parametrize("domain, init_policy_id, init_body, expected_policy_id, ts_reset, body_present",
+                         [("good.loc", "19990907T090909", {}, "20180907T090909", True, True),
+                          ("good.loc", "20180907T090909",
+                           {"version": "STSv1", "mode": "enforce",
+                            "mx": ["mail.loc"], "max_age": 86400},
+                           "20180907T090909", False, True),
+                          ("valid-none.loc", "19990907T090909", {}, "20180907T090909", True, True),
+                          ("blackhole.loc", "19990907T090909", {}, "19990907T090909", False, False),
+                          ("bad-record1.loc", "19990907T090909", {}, "19990907T090909", False, False),
+                          ("bad-policy1.loc", "19990907T090909", {}, "19990907T090909", False, False)
                           ])
 @pytest.mark.asyncio
 @pytest.mark.timeout(10)
 async def test_cache_update(cache,
-                            domain, init_policy_id, expected_policy_id, expected_update):
+                            domain, init_policy_id, init_body,
+                            expected_policy_id, ts_reset, body_present):
     cfg = utils.populate_cfg_defaults(None)
     cfg['proactive_policy_fetching']['enabled'] = True
     cfg['proactive_policy_fetching']['interval'] = 1
@@ -38,7 +42,8 @@ async def test_cache_update(cache,
     cfg["default_zone"]["timeout"] = 1
     cfg['shutdown_timeout'] = 1
 
-    await cache.set(domain, base_cache.CacheEntry(0, init_policy_id, {}))
+    init_ts = time.time() - 10
+    await cache.set(domain, base_cache.CacheEntry(init_ts, init_policy_id, init_body))
 
     pf = STSProactiveFetcher(cfg, cache)
     await pf.start()
@@ -52,17 +57,14 @@ async def test_cache_update(cache,
     result = await cache.get(domain)
     assert result
     assert result.pol_id == expected_policy_id
-    if expected_update:
-        assert time.time() - result.ts < 10  # update
-        # Due to an id change, a new body must be fetched
-        if init_policy_id != expected_policy_id:
-            assert result.pol_body
-        # Otherwise we don't fetch a new policy body
-        else:
-            assert not result.pol_body
+    if ts_reset:
+        # A fresh HTTPS fetch happened: the timestamp was updated.
+        assert time.time() - result.ts < 10
     else:
-        assert result.ts == 0
-        assert not result.pol_body
+        # Either NOT_CHANGED (policy unchanged) or no update at all: the
+        # original fetch timestamp must be preserved (RFC 8461 §3.2).
+        assert result.ts == init_ts
+    assert bool(result.pol_body) == body_present
 
     await pf.stop()
     await pf.close()
@@ -119,6 +121,67 @@ async def test_respect_previous_proactive_fetch_ts(cache):
 
     result = await cache.get("good.loc")
     assert result == init_record  # no update
+
+    await pf.stop()
+    await pf.close()
+
+
+class _FailingCache:
+    """A cache whose scan() always raises, simulating a backend outage."""
+
+    def __init__(self):
+        self.scan_calls = 0
+
+    async def setup(self):
+        pass
+
+    async def teardown(self):
+        pass
+
+    async def get(self, key):
+        return None
+
+    async def set(self, key, value):
+        pass
+
+    async def safe_set(self, domain, entry, logger):
+        pass
+
+    async def get_proactive_fetch_ts(self):
+        return 0
+
+    async def set_proactive_fetch_ts(self, timestamp):
+        pass
+
+    async def scan(self, token, amount_hint):
+        self.scan_calls += 1
+        raise RuntimeError("simulated backend outage")
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(10)
+async def test_fetch_survives_transient_cache_failure():
+    # P3: a transient cache failure (e.g. a brief backend outage) must not
+    # terminate the background refresher task; it should log and retry on
+    # the next cycle.
+    cfg = utils.populate_cfg_defaults(None)
+    cfg['proactive_policy_fetching']['enabled'] = True
+    cfg['proactive_policy_fetching']['interval'] = 1
+    cfg['proactive_policy_fetching']['concurrency_limit'] = 2
+    cfg["default_zone"]["timeout"] = 1
+    cfg['shutdown_timeout'] = 1
+
+    cache = _FailingCache()
+    pf = STSProactiveFetcher(cfg, cache)
+    await pf.start()
+
+    # Give it time to attempt (and fail) at least one cycle.
+    await asyncio.sleep(3)
+
+    # The task must still be running (not terminated by the exception) and
+    # must have retried the failing scan.
+    assert not pf._periodic_fetch_task.done()
+    assert cache.scan_calls >= 1
 
     await pf.stop()
     await pf.close()

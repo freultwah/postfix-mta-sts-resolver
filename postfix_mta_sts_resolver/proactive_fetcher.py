@@ -21,14 +21,23 @@ class STSProactiveFetcher:
 
     async def process_domain(self, domain_queue):
         async def update(cached):
-            status, policy = await self._resolver.resolve(domain, cached.pol_id)
+            # Only trust the cached policy ID for the DNS change-check while
+            # the policy is within its max_age; otherwise force a full fetch
+            # so the policy lifetime stays tied to the last HTTPS fetch
+            # (RFC 8461 §3.2).
+            if cached.pol_body and cached.pol_body.get('max_age', 0) + cached.ts < ts:
+                last_known_id = None
+            else:
+                last_known_id = cached.pol_id
+            status, policy = await self._resolver.resolve(domain, last_known_id)
             if status is STSFetchResult.VALID:
                 pol_id, pol_body = policy
                 updated = CacheEntry(ts, pol_id, pol_body)
                 await self._cache.safe_set(domain, updated, self._logger)
             elif status is STSFetchResult.NOT_CHANGED:
-                updated = CacheEntry(ts, cached.pol_id, cached.pol_body)
-                await self._cache.safe_set(domain, updated, self._logger)
+                # Policy unchanged: keep the original fetch timestamp so the
+                # policy still expires max_age after the last HTTPS fetch.
+                pass
             else:
                 self._logger.warning("Domain %s does not have a valid policy.", domain)
 
@@ -84,13 +93,22 @@ class STSProactiveFetcher:
 
     async def fetch_periodically(self):
         while True:  # Run until cancelled
-            next_fetch_ts = await self._cache.get_proactive_fetch_ts() + self._pf_interval
-            sleep_duration = max(constants.MIN_PROACTIVE_FETCH_INTERVAL,
-                                 next_fetch_ts - time.time() + 1)
+            try:
+                next_fetch_ts = await self._cache.get_proactive_fetch_ts() + self._pf_interval
+                sleep_duration = max(constants.MIN_PROACTIVE_FETCH_INTERVAL,
+                                     next_fetch_ts - time.time() + 1)
 
-            self._logger.debug("Sleeping for %ds until next fetch.", sleep_duration)
-            await asyncio.sleep(sleep_duration)
-            await self.iterate_domains()
+                self._logger.debug("Sleeping for %ds until next fetch.", sleep_duration)
+                await asyncio.sleep(sleep_duration)
+                await self.iterate_domains()
+            except Exception as exc:
+                # A transient backend failure (e.g. a brief Redis/Postgres
+                # outage or a SQLite timeout) must not terminate the
+                # background refresher; log it and retry on the next cycle.
+                # (CancelledError is a BaseException and is not caught here,
+                # so shutdown still propagates.)
+                self._logger.exception("Proactive fetch cycle failed: %s", exc)
+                await asyncio.sleep(constants.MIN_PROACTIVE_FETCH_INTERVAL)
 
     async def start(self):
         self._periodic_fetch_task = asyncio.create_task(self.fetch_periodically())
@@ -102,6 +120,10 @@ class STSProactiveFetcher:
             self._logger.warning("Awaiting periodic fetching to finish...")
             await self._periodic_fetch_task
         except asyncio.CancelledError:  # pragma: no cover
+            pass
+        except Exception:  # pragma: no cover
+            # The task may have already terminated due to an error; do not
+            # let that interrupt the daemon's subsequent cleanup.
             pass
 
     async def close(self):

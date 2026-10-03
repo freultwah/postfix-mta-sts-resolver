@@ -133,6 +133,40 @@ async def test_scanning_in_batches(cache_type, cache_opts, n_items, batch_size_l
             tmpfile.close()
 
 @pytest.mark.asyncio
+async def test_scan_stable_under_concurrent_set():
+    # Regression test: scan() must visit every entry exactly once even when
+    # set() (an LRU refresh, as done by the proactive workers between scan
+    # pages) reorders the cache. A positional cursor would skip or repeat
+    # entries in that case.
+    cache = utils.create_cache("internal", {"cache_size": 100})
+    await cache.setup()
+    n = 50
+    try:
+        for i in range(n):
+            await cache.set("d{:03d}".format(i),
+                            base_cache.CacheEntry(i, "pol_id", "pol_body"))
+
+        scanned = []
+        token = None
+        while True:
+            token, items = await cache.scan(token, 10)
+            for key, _ in items:
+                scanned.append(key)
+            if token is None:
+                break
+            # Simulate the workers refreshing the page just scanned (in
+            # reverse order) before the next page is read, reordering the
+            # LRU cache.
+            for key in [k for k, _ in items][::-1]:
+                entry = await cache.get(key)
+                await cache.set(key, entry)
+
+        assert len(scanned) == n
+        assert sorted(scanned) == sorted("d{:03d}".format(i) for i in range(n))
+    finally:
+        await cache.teardown()
+
+@pytest.mark.asyncio
 async def test_capped_cache():
     cache = utils.create_cache("internal", {"cache_size": 2})
     await cache.setup()

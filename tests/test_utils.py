@@ -48,9 +48,26 @@ def test_empty_config():
     ("   ", {}),
     (" ;   ;  ", {}),
     ("v=STSv1; id=20160831085700Z;;;", {"v": "STSv1", "id": "20160831085700Z"}),
+    # Duplicate field: the first occurrence wins (RFC 8461)
+    ("v=STSv1; id=1; id=2;", {"v": "STSv1", "id": "1"}),
+    ("v=STSv1; v=STSv2; id=1;", {"v": "STSv1", "id": "1"}),
 ])
 def test_parse_mta_sts_record(rec, expected):
     assert utils.parse_mta_sts_record(rec) == expected
+
+@pytest.mark.parametrize("text,expected", [
+    ("version: STSv1\nmode: enforce\nmx: mail.loc\nmax_age: 86400",
+     {"version": "STSv1", "mode": "enforce", "mx": ["mail.loc"], "max_age": "86400"}),
+    # Duplicate scalar field: the first occurrence wins (RFC 8461), so a
+    # later "mode: none" must not disable an earlier "mode: enforce".
+    ("version: STSv1\nmode: enforce\nmode: none\nmx: mail.loc",
+     {"version": "STSv1", "mode": "enforce", "mx": ["mail.loc"]}),
+    # All mx occurrences are used.
+    ("version: STSv1\nmode: enforce\nmx: mail1.loc\nmx: mail2.loc",
+     {"version": "STSv1", "mode": "enforce", "mx": ["mail1.loc", "mail2.loc"]}),
+])
+def test_parse_mta_sts_policy(text, expected):
+    assert utils.parse_mta_sts_policy(text) == expected
 
 @pytest.mark.parametrize("contenttype,expected", [
     ("text/plain", True),

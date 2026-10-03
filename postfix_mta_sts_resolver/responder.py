@@ -199,14 +199,25 @@ class STSSocketmapResponder:
         if self.is_stale(cached):
             ts = time.time()  # pylint: disable=invalid-name
             self._logger.debug("Lookup PERFORMED: domain = %s", domain)
-            # Check if newer policy exists or
-            # retrieve policy from scratch if there is no cached one
-            latest_pol_id = None if cached is None else cached.pol_id
+            # Only trust the cached policy ID for the DNS change-check while
+            # the policy is still within its max_age. Once it has expired,
+            # force a full HTTPS fetch so that (a) the policy lifetime stays
+            # tied to the last successful fetch (RFC 8461 §3.2) and (b) a
+            # replaced policy is discovered even if a stale or replayed DNS
+            # ID is served.
+            if (cached is None
+                    or not cached.pol_body
+                    or cached.pol_body.get('max_age', 0) + cached.ts < ts):
+                latest_pol_id = None
+            else:
+                latest_pol_id = cached.pol_id
             status, policy = await zone_cfg.resolver.resolve(domain, latest_pol_id)
 
             if status is STSFetchResult.NOT_CHANGED:
-                cached = CacheEntry(ts, cached.pol_id, cached.pol_body)
-                await self._cache.safe_set(domain, cached, self._logger)
+                # Policy unchanged: keep the cached entry (and its fetch
+                # timestamp) as-is. A DNS check must not extend the policy
+                # lifetime (RFC 8461 §3.2).
+                pass
             elif status is STSFetchResult.VALID:
                 pol_id, pol_body = policy
                 cached = CacheEntry(ts, pol_id, pol_body)

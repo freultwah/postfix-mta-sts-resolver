@@ -3,14 +3,31 @@ import asyncio
 import itertools
 import socket
 import os
+import time
 
 import pytest
 
 from postfix_mta_sts_resolver import netstring
-from postfix_mta_sts_resolver.responder import STSSocketmapResponder
+from postfix_mta_sts_resolver.responder import STSSocketmapResponder, ZoneEntry
+from postfix_mta_sts_resolver.resolver import STSFetchResult as FR
 import postfix_mta_sts_resolver.utils as utils
+import postfix_mta_sts_resolver.base_cache as base_cache
 
 from testdata import load_testdata
+
+
+class _MockResolver:
+    def __init__(self, status, policy=None):
+        self._status = status
+        self._policy = policy
+        self.calls = []
+
+    async def resolve(self, domain, last_known_id=None):
+        self.calls.append((domain, last_known_id))
+        return self._status, self._policy
+
+    async def close(self):
+        pass
 
 @pytest.fixture
 async def responder():
@@ -216,3 +233,73 @@ async def test_responder_with_custom_socket(responder, params):
         assert res == response
     finally:
         writer.close()
+
+
+def _make_responder(cfg, cache, resolver):
+    resp = STSSocketmapResponder(cfg, cache)
+    resp._default_zone = ZoneEntry(False, resolver, True, False)
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_expired_policy_forces_full_fetch():
+    # P1: an expired cached policy must not be passed to the DNS change-
+    # check (last_known_id must be None) so that a full HTTPS fetch happens
+    # and the policy lifetime stays tied to the last fetch (RFC 8461 §3.2).
+    cfg = utils.populate_cfg_defaults(None)
+    cfg["cache_grace"] = 0
+    cache = utils.create_cache(cfg['cache']['type'], cfg['cache']['options'])
+    await cache.setup()
+    try:
+        resp = _make_responder(cfg, cache, _MockResolver(FR.NOT_CHANGED))
+        now = time.time()  # pylint: disable=invalid-name
+        await cache.set("good.loc",
+                        base_cache.CacheEntry(now - 100, "pol1",
+                                              {"version": "STSv1", "mode": "enforce",
+                                               "mx": ["mail.loc"], "max_age": 1}))
+        await resp.process_request(b'test good.loc')
+        assert resp._default_zone.resolver.calls == [("good.loc", None)]
+    finally:
+        await cache.teardown()
+
+
+@pytest.mark.asyncio
+async def test_unexpired_policy_uses_cached_id():
+    # P1: a not-yet-expired cached policy is passed to the DNS change-check.
+    cfg = utils.populate_cfg_defaults(None)
+    cfg["cache_grace"] = 0
+    cache = utils.create_cache(cfg['cache']['type'], cfg['cache']['options'])
+    await cache.setup()
+    try:
+        resp = _make_responder(cfg, cache, _MockResolver(FR.NOT_CHANGED))
+        now = time.time()  # pylint: disable=invalid-name
+        await cache.set("good.loc",
+                        base_cache.CacheEntry(now - 10, "pol1",
+                                              {"version": "STSv1", "mode": "enforce",
+                                               "mx": ["mail.loc"], "max_age": 86400}))
+        await resp.process_request(b'test good.loc')
+        assert resp._default_zone.resolver.calls == [("good.loc", "pol1")]
+    finally:
+        await cache.teardown()
+
+
+@pytest.mark.asyncio
+async def test_not_changed_does_not_reset_ts():
+    # P1: a NOT_CHANGED (DNS id match) must not reset the cached fetch
+    # timestamp; the policy lifetime stays tied to the last HTTPS fetch.
+    cfg = utils.populate_cfg_defaults(None)
+    cfg["cache_grace"] = 0
+    cache = utils.create_cache(cfg['cache']['type'], cfg['cache']['options'])
+    await cache.setup()
+    try:
+        resp = _make_responder(cfg, cache, _MockResolver(FR.NOT_CHANGED))
+        init_ts = time.time() - 10  # pylint: disable=invalid-name
+        await cache.set("good.loc",
+                        base_cache.CacheEntry(init_ts, "pol1",
+                                              {"version": "STSv1", "mode": "enforce",
+                                               "mx": ["mail.loc"], "max_age": 86400}))
+        await resp.process_request(b'test good.loc')
+        result = await cache.get("good.loc")
+        assert result.ts == init_ts
+    finally:
+        await cache.teardown()

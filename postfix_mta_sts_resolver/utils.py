@@ -141,8 +141,15 @@ def load_config(filename):
 
 
 def parse_mta_sts_record(rec):
-    return dict(field.partition('=')[0::2] for field in
-                (field.strip() for field in rec.split(';')) if field)
+    # Per RFC 8461 the first occurrence of a field wins; later duplicates
+    # are ignored. (dict() would keep the last one, so build it manually.)
+    res = dict()
+    for field in (f.strip() for f in rec.split(';')):
+        if not field:
+            continue
+        key, _, value = field.partition('=')
+        res.setdefault(key, value)
+    return res
 
 
 def parse_mta_sts_policy(text):
@@ -154,9 +161,12 @@ def parse_mta_sts_policy(text):
         key, _, value = line.partition(':')
         value = value.lstrip()
         if key == 'mx':
+            # All mx occurrences are used (RFC 8461).
             res['mx'].append(value)
         else:
-            res[key] = value
+            # Per RFC 8461 the first occurrence of a field wins; later
+            # duplicates are ignored.
+            res.setdefault(key, value)
     return res
 
 
