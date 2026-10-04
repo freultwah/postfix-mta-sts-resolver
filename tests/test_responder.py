@@ -329,3 +329,27 @@ async def test_successful_check_throttles_subsequent_lookups():
         assert resp._default_zone.resolver.calls == [("good.loc", "pol1")]
     finally:
         await cache.teardown()
+
+
+@pytest.mark.asyncio
+async def test_last_check_is_bounded():
+    # P2: the per-domain last-check dictionary must not grow without bound.
+    # Entries older than cache_grace no longer throttle anything, so they are
+    # swept out (at most once per grace) to avoid retaining every checked
+    # domain for the daemon's lifetime.
+    cfg = utils.populate_cfg_defaults(None)
+    cfg["cache_grace"] = 60
+    cache = utils.create_cache(cfg['cache']['type'], cfg['cache']['options'])
+    await cache.setup()
+    try:
+        resp = _make_responder(cfg, cache, _MockResolver(FR.NOT_CHANGED))
+        base = 1_000_000.0  # pylint: disable=invalid-name
+        for i in range(1000):
+            resp._record_check(f"domain{i}.loc", base)
+        # All within the grace window: all retained.
+        assert len(resp._last_check) == 1000
+        # Advance past the grace period: the sweep drops the stale entries.
+        resp._record_check("new.loc", base + 61)
+        assert list(resp._last_check) == ["new.loc"]
+    finally:
+        await cache.teardown()

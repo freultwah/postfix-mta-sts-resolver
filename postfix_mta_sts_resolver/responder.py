@@ -55,6 +55,10 @@ class STSSocketmapResponder:
         # only updated on a full HTTPS fetch (RFC 8461 §3.2) and therefore
         # cannot be used for throttling.
         self._last_check = {}
+        # Time of the last expiry sweep of _last_check, so that the sweep
+        # (which is O(size)) runs at most once per cache_grace rather than on
+        # every lookup.
+        self._last_check_prune = 0.0
 
     # Check if cached record is nonexistent or stale
     def is_stale(self, cached, domain):
@@ -73,6 +77,19 @@ class STSSocketmapResponder:
             return True
 
         return False
+
+    def _record_check(self, domain, ts):
+        # Record a successful check for throttling, and keep the tracking
+        # dictionary bounded. Entries older than cache_grace no longer
+        # throttle anything, so sweep them out periodically (at most once per
+        # cache_grace) to avoid unbounded growth for long-running instances
+        # handling many distinct domains.
+        self._last_check[domain] = ts
+        if ts - self._last_check_prune >= self._grace:
+            cutoff = ts - self._grace
+            self._last_check = {d: t for d, t in self._last_check.items()
+                                if t >= cutoff}
+            self._last_check_prune = ts
 
     async def start(self):
         def _spawn(reader, writer):
@@ -224,12 +241,12 @@ class STSSocketmapResponder:
                 # timestamp) as-is. A DNS check must not extend the policy
                 # lifetime (RFC 8461 §3.2). Record the check time so the
                 # lookup is throttled by cache_grace.
-                self._last_check[domain] = ts
+                self._record_check(domain, ts)
             elif status is STSFetchResult.VALID:
                 pol_id, pol_body = policy
                 cached = CacheEntry(ts, pol_id, pol_body)
                 await self._cache.safe_set(domain, cached, self._logger)
-                self._last_check[domain] = ts
+                self._record_check(domain, ts)
             else:
                 if cached is None:
                     have_policy = False
