@@ -22,6 +22,13 @@ jobs:
             redis-server dnsmasq lsof nginx-extras tinyproxy postgresql \
             build-essential libssl-dev libffi-dev python3-dev curl
 
+      # Install Python dependencies before /etc/resolv.conf is pointed at the
+      # local dnsmasq (below): pip needs working DNS, and dnsmasq is only
+      # started in "Start services". The dev extras pull in cryptography,
+      # which the certificate step uses.
+      - name: Install Python dependencies
+        run: pip install -e '.[dev,sqlite,redis,postgres]'
+
       - name: Configure dnsmasq
         run: |
           install -m 644 tests/resolv.conf /etc/resolv-dnsmasq.conf
@@ -35,7 +42,6 @@ jobs:
 
       - name: Generate test certificates
         run: |
-          pip install cryptography
           mkdir -p /tmp/certs /tmp/bad-certs
           python tests/mkcerts.py -o /tmp/certs \
             -D good.loc mta-sts.good.loc \
@@ -80,9 +86,6 @@ jobs:
           done
           echo "Proxy startup failed" >&2
           exit 1
-
-      - name: Install package with test dependencies
-        run: pip install -e '.[dev,sqlite,redis,postgres]'
 
       - name: Run test suite
         run: TOXENV=py311 pytest .
