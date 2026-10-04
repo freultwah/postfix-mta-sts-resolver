@@ -49,7 +49,11 @@ class SqliteConnPool:
             async with db.cursor() as cur:
                 for q in self._init_queries:
                     await cur.execute(q)
-        except Exception:
+        # Catch BaseException (not just Exception) so the connection is also
+        # closed if initialization is cancelled: on modern Python
+        # asyncio.CancelledError is a BaseException, and leaving the
+        # connection open would leak it.
+        except BaseException:
             await db.close()
             raise
         return db

@@ -30,7 +30,7 @@ jobs:
 
       - name: Configure PostgreSQL
         run: |
-          sed -i 's/\bpeer\b/trust/; s\bscram-sha-256\b/trust/; s\bmd5\b/trust/' \
+          sed -i 's/\bpeer\b/trust/; s/\bscram-sha-256\b/trust/; s/\bmd5\b/trust/' \
             /etc/postgresql/*/main/pg_hba.conf
 
       - name: Generate test certificates

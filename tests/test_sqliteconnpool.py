@@ -1,8 +1,10 @@
 import asyncio
 import tempfile
+from unittest import mock
 
 import pytest
 
+import postfix_mta_sts_resolver.sqlite_cache as sqlite_cache
 from postfix_mta_sts_resolver.sqlite_cache import SqliteConnPool
 
 CONN_INIT = [
@@ -116,3 +118,29 @@ async def test_bad_init(dbfile):
             await pool.prepare()
     finally:
         await pool.stop()
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(2)
+async def test_new_conn_closes_on_cancellation(dbfile):
+    # A CancelledError (a BaseException on modern Python) raised while
+    # initializing a connection must still close it, otherwise the
+    # connection leaks.
+    closed = []
+    class FakeCursor:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *exc):
+            return False
+        async def execute(self, q):
+            raise asyncio.CancelledError()
+    class FakeDB:
+        def cursor(self):
+            return FakeCursor()
+        async def close(self):
+            closed.append(True)
+    pool = SqliteConnPool(1, (dbfile,), init_queries=CONN_INIT)
+    with mock.patch.object(sqlite_cache.aiosqlite, "connect",
+                           new=mock.AsyncMock(return_value=FakeDB())):
+        with pytest.raises(asyncio.CancelledError):
+            await pool._new_conn()
+    assert closed == [True]
