@@ -17,16 +17,6 @@ jobs:
         with:
           fetch-depth: 0
       -
-        name: Find Git Tag
-        id: tagger
-        uses: jimschubert/query-tag-action@v2
-        with:
-          include: 'v*'
-          exclude: '*-rc*'
-          commit-ish: 'HEAD'
-          skip-unshallow: 'true'
-          abbrev: 7
-      -
         name: Determine image tag type
         uses: haya14busa/action-cond@v1
         id: imgtag
@@ -55,4 +45,3 @@ jobs:
           platforms: linux/amd64,linux/arm64,linux/386,linux/arm/v7
           push: true
           tags: ${{ steps.imgtag.outputs.value }}
-          build-args: 'GIT_DESC=${{steps.tagger.outputs.tag}}'
