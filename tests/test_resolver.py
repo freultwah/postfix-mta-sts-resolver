@@ -1,12 +1,46 @@
 import collections.abc
 import contextlib
 import os
+from types import SimpleNamespace
 
 import pytest
 
 import postfix_mta_sts_resolver.resolver as resolver
 from postfix_mta_sts_resolver.resolver import STSFetchResult as FR
 from postfix_mta_sts_resolver.resolver import STSResolver as Resolver
+from postfix_mta_sts_resolver.resolver import _extract_txt_records
+
+
+def _aiodns4_result(*txt_bytes):
+    """Build an aiodns >= 4.0 query_dns() style DNSResult."""
+    answer = [
+        SimpleNamespace(data=SimpleNamespace(data=b)) for b in txt_bytes
+    ]
+    return SimpleNamespace(answer=answer)
+
+
+def _aiodns3_result(*texts):
+    """Build an aiodns 3.x query() style list of records."""
+    return [SimpleNamespace(text=t) for t in texts]
+
+
+def test_extract_txt_records_aiodns4():
+    result = _aiodns4_result(
+        b'v=STSv1;id=20200428155800Z', b'other record')
+    assert _extract_txt_records(result) == [
+        'v=STSv1;id=20200428155800Z', 'other record']
+
+
+def test_extract_txt_records_aiodns3():
+    result = _aiodns3_result(
+        'v=STSv1;id=20200428155800Z', b'bytes record')
+    assert _extract_txt_records(result) == [
+        'v=STSv1;id=20200428155800Z', 'bytes record']
+
+
+def test_extract_txt_records_drops_non_ascii():
+    result = _aiodns4_result(b'v=STSv1;id=x', b'\xff\xfe invalid')
+    assert _extract_txt_records(result) == ['v=STSv1;id=x']
 
 @contextlib.contextmanager
 def set_env(**environ):

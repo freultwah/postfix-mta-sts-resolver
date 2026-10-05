@@ -25,6 +25,21 @@ class STSFetchResult(enum.Enum):
 
 _HEADERS = {"User-Agent": defaults.USER_AGENT}
 
+
+def _extract_txt_records(dns_result):
+    """Normalize a DNS TXT query result to a list of record text values.
+
+    aiodns >= 4.0 ``query_dns()`` returns a ``DNSResult`` whose ``.answer``
+    is a list of ``DNSRecord`` objects (each ``.data`` is a ``TXTRecordData``
+    holding the raw TXT bytes in ``.data``). aiodns 3.x ``query()`` returns a
+    list of records exposing the text directly via ``.text``.
+    """
+    if hasattr(dns_result, 'answer'):
+        raw = [rec.data.data for rec in dns_result.answer]
+    else:
+        raw = [rec.text for rec in dns_result]
+    return list(filter_text(raw))
+
 # pylint: disable=too-few-public-methods
 # pylint: disable=too-many-instance-attributes
 # pylint: disable=too-many-statements
@@ -105,8 +120,9 @@ class STSResolver:
         except asyncio.TimeoutError:
             return STSFetchResult.FETCH_ERROR, None
 
-        # workaround for floating return type of pycares
-        txt_records = filter_text(rec.text for rec in txt_records)
+        # Normalize the DNS answer to a flat list of text values (handles
+        # both aiodns 3.x query() and aiodns >= 4.0 query_dns() return types).
+        txt_records = _extract_txt_records(txt_records)
 
         # RFC 8461 strictly defines version string as first field
         txt_records = [txt for txt in txt_records
