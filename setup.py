@@ -25,7 +25,7 @@ setup(name='postfix_mta_sts_resolver',
           'sqlite': 'aiosqlite>=0.17.0',
           'redis': 'redis>=4.2.0',
           'postgres': [
-              'psycopg>=3.2',
+              'psycopg[binary]>=3.2',
               'psycopg-pool>=3.2'
           ],
           'dev': [

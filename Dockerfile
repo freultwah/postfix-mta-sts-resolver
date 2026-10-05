@@ -1,4 +1,4 @@
-FROM docker.io/python:3.8-alpine
+FROM docker.io/python:3.11-alpine
 LABEL maintainer="Vladislav Yarmak <vladislav-ex-src@vm-0.com>"
 
 ARG UID=18721
