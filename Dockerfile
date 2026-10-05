@@ -20,8 +20,8 @@ RUN true \
 COPY . /build
 WORKDIR /build
 RUN true \
-   && apk add --no-cache --virtual .build-deps alpine-sdk libffi-dev \
-   && apk add --no-cache libffi \
+   && apk add --no-cache --virtual .build-deps alpine-sdk libffi-dev cmake c-ares-dev \
+   && apk add --no-cache libffi c-ares \
    && pip3 install --no-cache-dir .[sqlite,redis,postgres,uvloop] \
    && mkdir /var/lib/mta-sts \
    && chown -R "$USER:$USER" /build /var/lib/mta-sts \
