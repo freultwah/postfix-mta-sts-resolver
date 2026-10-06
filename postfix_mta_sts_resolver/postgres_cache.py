@@ -85,23 +85,16 @@ class PostgresCache(BaseCache):
         if res is not None:
             ts, pol_id, pol_body = res
             ts = int(ts)
-            # Handle different possible types of pol_body
-            if isinstance(pol_body, dict):
-                return CacheEntry(ts, pol_id, pol_body)
-            elif isinstance(pol_body, str):
-                return CacheEntry(ts, pol_id, json.loads(pol_body))
-            else:
-                return CacheEntry(ts, pol_id, None)
+            # psycopg decodes the jsonb value into a Python object already
+            return CacheEntry(ts, pol_id, pol_body)
         else:
             return None
 
     async def set(self, key, value):
         ts, pol_id, pol_body = value
-        # Convert dictionary to JSON string if needed
-        if isinstance(pol_body, dict):
-            pol_body_json = json.dumps(pol_body)
-        else:
-            pol_body_json = pol_body
+        # Serialize the policy body to JSON; psycopg stores it in the jsonb
+        # column and decodes it back to a Python object on read.
+        pol_body_json = json.dumps(pol_body)
 
         async with self._pool.connection() as conn:
             async with conn.transaction():
@@ -136,13 +129,8 @@ class PostgresCache(BaseCache):
                 ts = int(ts)
                 rowid = int(rowid)
                 new_token = max(new_token, rowid)
-                # Handle different possible types of pol_body
-                if isinstance(pol_body, dict):
-                    result.append((domain, CacheEntry(ts, pol_id, pol_body)))
-                elif isinstance(pol_body, str):
-                    result.append((domain, CacheEntry(ts, pol_id, json.loads(pol_body))))
-                else:
-                    result.append((domain, CacheEntry(ts, pol_id, None)))
+                # psycopg decodes the jsonb value into a Python object already
+                result.append((domain, CacheEntry(ts, pol_id, pol_body)))
             new_token += 1
             return new_token, result
         else:
