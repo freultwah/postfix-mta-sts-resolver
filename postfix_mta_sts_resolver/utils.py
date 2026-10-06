@@ -205,7 +205,7 @@ def filter_text(strings):
             raise TypeError('Only bytes or strings are expected.')
 
 
-async def create_custom_socket(host, port, *,  # pylint: disable=too-many-locals
+async def create_custom_socket(host, port, *,  # pylint: disable=too-many-locals,too-many-arguments
                                family=socket.AF_UNSPEC,
                                type=socket.SOCK_STREAM,  # pylint: disable=redefined-builtin
                                flags=socket.AI_PASSIVE,
