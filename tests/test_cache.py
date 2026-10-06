@@ -15,7 +15,7 @@ async def setup_cache(cache_type, cache_opts):
     if cache_type == 'redis':
         await cache._pool.flushdb()
     if cache_type == 'postgres':
-        async with cache._pool.acquire() as conn:
+        async with cache._pool.connection() as conn:
             await conn.execute('TRUNCATE sts_policy_cache')
             await conn.execute('TRUNCATE proactive_fetch_ts')
     return cache, tmpfile
