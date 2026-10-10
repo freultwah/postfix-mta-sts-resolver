@@ -3,6 +3,7 @@ import contextlib
 import os
 from types import SimpleNamespace
 
+import aiodns
 import pytest
 
 import postfix_mta_sts_resolver.resolver as resolver
@@ -13,8 +14,10 @@ from postfix_mta_sts_resolver.resolver import _extract_txt_records
 
 def _aiodns4_result(*txt_bytes):
     """Build an aiodns >= 4.0 query_dns() style DNSResult."""
+    txt_type = aiodns.pycares.QUERY_TYPE_TXT
     answer = [
-        SimpleNamespace(data=SimpleNamespace(data=b)) for b in txt_bytes
+        SimpleNamespace(type=txt_type, data=SimpleNamespace(data=b))
+        for b in txt_bytes
     ]
     return SimpleNamespace(answer=answer)
 
@@ -40,6 +43,22 @@ def test_extract_txt_records_aiodns3():
 
 def test_extract_txt_records_drops_non_ascii():
     result = _aiodns4_result(b'v=STSv1;id=x', b'\xff\xfe invalid')
+    assert _extract_txt_records(result) == ['v=STSv1;id=x']
+
+
+def test_extract_txt_records_aiodns4_skips_non_txt():
+    # The answer can contain non-TXT records (e.g. a CNAME when the STS host
+    # is an alias). Only TXT records carry the policy; selecting them by type
+    # avoids AttributeError on record types whose data has no .data field.
+    txt_type = aiodns.pycares.QUERY_TYPE_TXT
+    cname_type = aiodns.pycares.QUERY_TYPE_CNAME
+    answer = [
+        SimpleNamespace(type=cname_type,
+                        data=SimpleNamespace(cname='target.example.')),
+        SimpleNamespace(type=txt_type,
+                        data=SimpleNamespace(data=b'v=STSv1;id=x')),
+    ]
+    result = SimpleNamespace(answer=answer)
     assert _extract_txt_records(result) == ['v=STSv1;id=x']
 
 @contextlib.contextmanager

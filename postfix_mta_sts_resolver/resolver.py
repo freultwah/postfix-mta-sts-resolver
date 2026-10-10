@@ -30,12 +30,17 @@ def _extract_txt_records(dns_result):
     """Normalize a DNS TXT query result to a list of record text values.
 
     aiodns >= 4.0 ``query_dns()`` returns a ``DNSResult`` whose ``.answer``
-    is a list of ``DNSRecord`` objects (each ``.data`` is a ``TXTRecordData``
-    holding the raw TXT bytes in ``.data``). aiodns 3.x ``query()`` returns a
-    list of records exposing the text directly via ``.text``.
+    is a list of ``DNSRecord`` objects. The answer can contain non-TXT
+    records (e.g. a CNAME when the STS host is an alias for another name),
+    so select only TXT records; each TXT record's ``.data`` is a
+    ``TXTRecordData`` holding the raw TXT bytes in ``.data``. aiodns 3.x
+    ``query()`` returns a list of records exposing the text directly via
+    ``.text``.
     """
     if hasattr(dns_result, 'answer'):
-        raw = [rec.data.data for rec in dns_result.answer]
+        txt_type = aiodns.pycares.QUERY_TYPE_TXT
+        raw = [rec.data.data for rec in dns_result.answer
+               if rec.type == txt_type]
     else:
         raw = [rec.text for rec in dns_result]
     return list(filter_text(raw))
