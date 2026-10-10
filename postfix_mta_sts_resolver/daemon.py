@@ -149,6 +149,14 @@ def main():  # pragma: no cover
                             "Falling back to built-in event loop.")
         logger.info("Eventloop started.")
 
-        asyncio.run(amain(cfg))
+        # On Python 3.12+ enable_uvloop() stashed a loop factory (the
+        # set_event_loop_policy API is deprecated/removed); pass it to
+        # asyncio.run(). On older versions the policy was set directly, so no
+        # factory is needed.
+        loop_factory = utils.get_uvloop_loop_factory()
+        if loop_factory is not None:
+            asyncio.run(amain(cfg), loop_factory=loop_factory)
+        else:
+            asyncio.run(amain(cfg))
         logger.info("Server finished its work.")
     return os.EX_OK

@@ -6,6 +6,7 @@ import asyncio
 import socket
 import queue
 import argparse
+import sys
 
 import yaml
 
@@ -67,15 +68,36 @@ def setup_logger(name, verbosity, handler):
     return logger
 
 
+# Stashed uvloop loop factory for asyncio.run() on Python 3.12+. A mutable
+# container (rather than a module global) so enable_uvloop() need not use the
+# ``global`` statement. On older versions the event loop policy is set
+# directly instead (see enable_uvloop).
+_UVLOOP = {"loop_factory": None}
+
+
 def enable_uvloop():  # pragma: no cover
+    """Enable uvloop if available, returning True on success.
+
+    On Python 3.12+ the uvloop loop factory is stashed for ``asyncio.run()``
+    (retrieve it with ``get_uvloop_loop_factory()``), because
+    ``asyncio.set_event_loop_policy`` is deprecated since 3.14 and removed in
+    3.16. On older versions the event loop policy is set directly.
+    """
     try:
         # pylint: disable=import-outside-toplevel
         import uvloop
-        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     except ImportError:
         return False
+    if sys.version_info >= (3, 12):
+        _UVLOOP["loop_factory"] = uvloop.new_event_loop
     else:
-        return True
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    return True
+
+
+def get_uvloop_loop_factory():  # pragma: no cover
+    """Return the stashed uvloop loop factory (Python 3.12+), else None."""
+    return _UVLOOP["loop_factory"]
 
 
 def populate_cfg_defaults(cfg):
