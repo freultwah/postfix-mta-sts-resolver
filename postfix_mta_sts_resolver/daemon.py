@@ -155,6 +155,10 @@ def main():  # pragma: no cover
         # factory is needed.
         loop_factory = utils.get_uvloop_loop_factory()
         if loop_factory is not None:
+            # loop_factory is only a valid asyncio.run() argument on Python
+            # 3.12+ (where this branch runs); pylint on older interpreters
+            # can't see that, so silence the false positive.
+            # pylint: disable-next=unexpected-keyword-arg
             asyncio.run(amain(cfg), loop_factory=loop_factory)
         else:
             asyncio.run(amain(cfg))
